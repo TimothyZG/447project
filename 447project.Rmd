@@ -1,0 +1,43 @@
+---
+title: "447 Project Proposal"
+author: "Tim 30407324"
+output: html_notebook
+---
+
+## TL;DR
+We'll apply bayesian inference in the domain of species density estimation in ecology. Specifically, we'll estimate and predict the density of migratory birds and fish in Canada employing bayesian spatial models and time series models.
+
+## Datasets
+- **Birds** -- Birds count dataset is accessible through Breeding Bird Survey [USGS BBS](https://www.usgs.gov/centers/eesc) by querying by region for BC. It contains annual observations count data across more than 50 years for BC routes.
+- **Fish** -- fish count dataset is accessible through [Government of Canada](https://open.canada.ca/data/en/dataset/02bf1fca-2fda-11e9-a466-1860247f53e3), containing location-clustered capture data of fish across Canadian lakes, streams, and oceans.
+
+Here's a preview of the Fish dataset:
+```{r}
+library(magrittr)
+library(dplyr)
+fish = read.csv("fish.csv") %>%
+  select("Species", "SITEID", "Date","Waterbody.Name","WaterbodyType","Province")
+head(fish)
+```
+
+
+Here's a preview of the Birds dataset.
+```{r}
+bird = read.csv("bird.csv")
+names(bird) = gsub("X", "Year", names(bird))
+head(bird)
+```
+
+## Project Themes
+The two themes I'll aim to explore are spatial models and time series models, they are suitable because the bird dataset contains yearly , and the fish dataset provides clustered location, and these attributes are highly meaningful from ecological preservation perspectives.
+
+### Spatial Models
+On the spatial model side, I'll follow [Moraga Ch9](https://www.paulamoraga.com/book-spatial/bayesian-spatial-models.html) and start with testing out BYM model which assigns independent and non-identicle priors to latents from different regions. 
+
+### Time series Models
+For the Birds dataset, we'll employ a time-series model to infer the density of each bird species. I plan to start with experimenting with time series in two settings: prediction and fill in blank. The blank comes from the no data gap in 2020, in which case there's no ground truth to verify, but we could also set aside 2021-2022 (the most recent data) as prediction and see how the model does on those as a rough estimate of how accurate the estimate we have on 2020 is.
+
+
+## Team Contribution Assignment
+N/A, single person group.
+
