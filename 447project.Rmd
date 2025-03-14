@@ -2,8 +2,8 @@
 title: "447 Project Proposal"
 author: "Tim 30407324"
 output:
-  pdf_document: default
   html_notebook: default
+  pdf_document: default
 ---
 
 ### Github
