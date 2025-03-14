@@ -1,11 +1,16 @@
 ---
 title: "447 Project Proposal"
 author: "Tim 30407324"
-output: html_notebook
+output:
+  pdf_document: default
+  html_notebook: default
 ---
 
+### Github
+[Repo](https://github.com/TimothyZG/447project)
+
 ## TL;DR
-We'll apply bayesian inference in the domain of species density estimation in ecology. Specifically, we'll estimate and predict the density of migratory birds and fish in Canada employing bayesian spatial models and time series models.
+We'll apply Bayesian inference in the domain of species density estimation in ecology. Specifically, we'll estimate and predict the density of migratory birds and fish in Canada employing bayesian spatial models and time series models.
 
 ## Datasets
 - **Birds** -- Birds count dataset is accessible through Breeding Bird Survey [USGS BBS](https://www.usgs.gov/centers/eesc) by querying by region for BC. It contains annual observations count data across more than 50 years for BC routes.
@@ -25,6 +30,8 @@ Here's a preview of the Birds dataset.
 ```{r}
 bird = read.csv("bird.csv")
 names(bird) = gsub("X", "Year", names(bird))
+bird = bird %>%
+  select("Species.List", "Year1968", "Year1969","Year1970","Year2020","Year2021","Year2022")
 head(bird)
 ```
 
