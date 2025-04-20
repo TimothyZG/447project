@@ -1,6 +1,5 @@
 ---
-title: "447 Project Proposal"
-author: "Tim 30407324"
+title: "447 Project Appendix (Code)"
 output:
   html_notebook: default
   pdf_document: default
@@ -9,40 +8,285 @@ output:
 ### Github
 [Repo](https://github.com/TimothyZG/447project)
 
-## TL;DR
-We'll apply Bayesian inference in the domain of species density estimation in ecology. Specifically, we'll estimate and predict the density of migratory birds and fish in Canada employing bayesian spatial models and time series models.
-
-## Datasets
-- **Birds** -- Birds count dataset is accessible through Breeding Bird Survey [USGS BBS](https://www.usgs.gov/centers/eesc) by querying by region for BC. It contains annual observations count data across more than 50 years for BC routes.
-- **Fish** -- fish count dataset is accessible through [Government of Canada](https://open.canada.ca/data/en/dataset/02bf1fca-2fda-11e9-a466-1860247f53e3), containing location-clustered capture data of fish across Canadian lakes, streams, and oceans.
-
-Here's a preview of the Fish dataset:
+### Data Wrangling:
 ```{r}
-library(magrittr)
+library(readr)
 library(dplyr)
-fish = read.csv("fish.csv") %>%
-  select("Species", "SITEID", "Date","Waterbody.Name","WaterbodyType","Province")
-head(fish)
-```
+library(tidyr)
+library(ggplot2)
 
+n = 10
 
-Here's a preview of the Birds dataset.
-```{r}
-bird = read.csv("bird.csv")
-names(bird) = gsub("X", "Year", names(bird))
-bird = bird %>%
-  select("Species.List", "Year1968", "Year1969","Year1970","Year2020","Year2021","Year2022")
+bird <- read_csv("bird.csv", show_col_types = FALSE)
 head(bird)
+bird$`2020` <- as.numeric(gsub("-", "0", bird$`2020`))
+bird <- bird %>% select(-`2020`) # remove 2020 since everything is null this year
+
+route_row <- bird %>% 
+  filter(`Species List` == "Route Count") %>%
+  select(-`Species List`) %>%
+  pivot_longer(everything(), names_to = "Year", values_to = "RouteCount") %>%
+  mutate(Year = as.integer(Year))
+
+bird_data <- bird %>% 
+  filter(`Species List` != "Route Count") %>% 
+  filter(`Species List` != "Total individuals")%>%
+  filter(`Species List` != "Total Species")
+
+years <- sort(unique(bird_long$Year))
+total_species_count = length(unique(bird_data$`Species List`))
+cat("\nTotal recorded number of species in the BC region is:",total_species_count)
+T <- length(years)
+S <- n 
+n_other_species <- length(unique(bird_data$`Species List`)) - S
+
+bird_long <- bird_data %>%
+  pivot_longer(-`Species List`, names_to = "Year", values_to = "Count") %>%
+  mutate(
+    Year = as.integer(Year),
+    Count = as.numeric(gsub("-", "0", Count))
+  ) %>%
+  left_join(route_row, by = "Year") %>%
+  mutate(CountPerRoute = Count / RouteCount)
+
+top_species <- bird_long %>%
+  group_by(`Species List`) %>%
+  summarise(total = sum(Count, na.rm = TRUE)) %>%
+  slice_max(total, n = n) %>%
+  pull(`Species List`)
+cat("Top 10 species in the BC region are:",paste(top_species, collapse = ", "))
+
+y_top <- bird_long %>%
+  filter(`Species List` %in% top_species) %>%
+  group_by(`Species List`, Year) %>%
+  summarise(
+    Total = sum(Count, na.rm = TRUE),
+    RouteCount = first(RouteCount),
+    .groups = "drop"
+  ) %>%
+  mutate(PerRoute = Total / RouteCount) %>%
+  mutate(`Species List` = factor(`Species List`, levels = top_species)) %>%
+  pivot_wider(
+    id_cols = Year,
+    names_from = `Species List`,
+    values_from = PerRoute,
+    values_fill = 0
+  ) %>%
+  arrange(Year) %>%
+  select(all_of(top_species)) %>%
+  t()
+
+# y_other
+y_other <- bird_long %>%
+  filter(!`Species List` %in% top_species) %>%
+  group_by(Year) %>%
+  summarise(
+    Total = sum(Count, na.rm = TRUE),
+    RouteCount = first(RouteCount),
+    .groups = "drop"
+  ) %>%
+  mutate(y_other = Total / RouteCount) %>%
+  arrange(Year) %>%
+  pull(y_other)
+
+# y_total
+y_total <- bird_long %>%
+  group_by(Year) %>%
+  summarise(
+    Total = sum(Count, na.rm = TRUE),
+    RouteCount = first(RouteCount),
+    .groups = "drop"
+  ) %>%
+  mutate(y_total = Total / RouteCount) %>%
+  arrange(Year) %>%
+  pull(y_total)
+
+
+y_top[is.na(y_top)] <- 0
+y_other[is.na(y_other)] <- 0
+y_total[is.na(y_total)] <- 0
+
+RouteCount <- route_row %>%
+  arrange(Year) %>%
+  pull(RouteCount)
+
+year_zeroed <- years - min(years)
+
+stan_data <- list(
+  T = T,
+  S = S,
+  y_top = y_top,
+  y_other = y_other,
+  y_total = y_total,
+  n_other_species = n_other_species,
+  year_zeroed = year_zeroed,
+  RouteCount = RouteCount
+)
+
 ```
 
-## Project Themes
-The two themes I'll aim to explore are spatial models and time series models, they are suitable because the bird dataset contains yearly , and the fish dataset provides clustered location, and these attributes are highly meaningful from ecological preservation perspectives.
+### Bird Density analysis Model
+```{stan output.var=distrest}
+data {
+  int<lower=1> T;                  
+  int<lower=1> S;                  
+  matrix[S, T] y_top;              
+  vector[T] y_other;               
+  int<lower=1> n_other_species;    
+  vector[T] year_zeroed;
+}
 
-### Spatial Models
-On the spatial model side, I'll follow [Moraga Ch9](https://www.paulamoraga.com/book-spatial/bayesian-spatial-models.html) and start with testing out BYM model which assigns independent and non-identicle priors to latents from different regions. 
+parameters {
+  vector<lower=0>[S + 1] intercept;
+  vector[S + 1] slope;     
+  real<lower=0> sigma_noise;
+  real<lower=0> sigma_top;   
+  real<lower=0> sigma_other;
+  real<lower=0> obs_noise_top;
+  real<lower=0> obs_noise_other;
+}
 
-### Time series Models
-For the Birds dataset, we'll employ a time-series model to infer the density of each bird species. I plan to start with experimenting with time series in two settings: prediction and fill in blank. The blank comes from the no data gap in 2020, in which case there's no ground truth to verify, but we could also set aside 2021-2022 (the most recent data) as prediction and see how the model does on those as a rough estimate of how accurate the estimate we have on 2020 is.
+model {
+  intercept ~ exponential(0.005);
+  sigma_top ~ exponential(0.5);
+  sigma_noise ~ exponential(0.5);
+  for (s in 1:S)
+    slope[s] ~ normal(0, sigma_top);
+  slope[S + 1] ~ normal(0, sigma_noise);
+  
+  obs_noise_top ~ exponential(0.1);
+  obs_noise_other ~ exponential(0.1);
+  
+  for (t in 1:T) {
+    for (s in 1:S)
+      y_top[s, t] ~ normal(intercept[s] + slope[s] * year_zeroed[t], obs_noise_top);
+    y_other[t] ~ normal(intercept[S + 1] + slope[S + 1] * year_zeroed[t], obs_noise_other);
+  }
+}
+
+generated quantities {
+  vector[T] y_total_pred;
+  for (t in 1:T) {
+    real top_sum = 0;
+    for (s in 1:S)
+      top_sum += intercept[s] + slope[s] * year_zeroed[t];
+
+    y_total_pred[t] = (top_sum + (intercept[S + 1] + slope[S + 1] * year_zeroed[t]));
+  }
+}
+
+```
+
+
+```{r}
+library(rstan)
+fit <- sampling(
+  object = distrest,
+  data = stan_data,
+  iter = 5000,
+  chains = 4,
+  seed = 17,
+  refresh=-1
+)
+
+print(fit, pars = c("slope", "intercept"))
+```
+### Predict for 2020
+```{r}
+posterior <- rstan::extract(fit)
+intercepts <- colMeans(posterior$intercept)
+slopes     <- colMeans(posterior$slope)
+year_base <- min(bird_long$Year)
+year_zeroed_2020 <- 2020 - year_base
+pred_top_2020 <- intercepts[1:stan_data$S] + slopes[1:stan_data$S] * year_zeroed_2020
+pred_other_2020 <- intercepts[stan_data$S + 1] + slopes[stan_data$S + 1] * year_zeroed_2020
+pred_total_2020 <- (sum(pred_top_2020) + pred_other_2020)
+cat("pred_top_2020",sum(pred_top_2020),"pred_other_2020",pred_other_2020,"pred_total_2020",pred_total_2020)
+```
+
+### Plotting Predictions
+```{r}
+posterior <- rstan::extract(fit)
+
+intercept_mean <- colMeans(posterior$intercept)
+slope_mean     <- colMeans(posterior$slope)
+
+y_total_pred <- colMeans(posterior$y_total_pred)
+
+S <- stan_data$S
+T <- stan_data$T
+years <- stan_data$year_zeroed
+
+
+fitted_top <- sapply(1:T, function(t) {
+  intercept_mean[1:S] + slope_mean[1:S] * years[t]
+})
+rownames(fitted_top) <- paste0("Top_", 1:S)
+
+
+fitted_other <- intercept_mean[S + 1] + slope_mean[S + 1] * years
+
+obs_top <- as.data.frame(t(stan_data$y_top))
+colnames(obs_top) <- rownames(fitted_top)
+obs_top$Year <- years + min(bird_long$Year)
+
+obs_long <- pivot_longer(obs_top, -Year, names_to = "Species", values_to = "Observed")
+
+fit_top <- as.data.frame(t(fitted_top))
+colnames(fit_top) <- rownames(fitted_top)
+fit_top$Year <- years + min(bird_long$Year)
+fit_long <- pivot_longer(fit_top, -Year, names_to = "Species", values_to = "Predicted")
+
+merged_top <- left_join(obs_long, fit_long, by = c("Year", "Species"))
+
+ggplot(merged_top, aes(x = Year, color = Species)) +
+  geom_line(aes(y = Observed, linetype = "Observed")) +
+  geom_line(aes(y = Predicted, linetype = "Predicted")) +
+  scale_linetype_manual(values = c("Observed" = "dashed", "Predicted" = "solid")) +
+  labs(
+    title = "Top 10 Species: Observed vs Fitted",
+    y = "Count per Route",
+    linetype = "Type"
+  ) +
+  theme_minimal()
+
+
+df_other <- data.frame(
+  Year = years + min(bird_long$Year),
+  Observed = stan_data$y_other,
+  Predicted = fitted_other
+)
+
+ggplot(df_other, aes(x = Year)) +
+  geom_line(aes(y = Observed, linetype = "Observed"), color = "black") +
+  geom_line(aes(y = Predicted, linetype = "Predicted"), color = "green") +
+  scale_linetype_manual(values = c("Observed" = "dashed", "Predicted" = "solid")) +
+  labs(
+    title = "Other Species Group: Observed vs Fitted",
+    y = "Count per Route",
+    linetype = "Type"
+  ) +
+  theme_minimal()
+
+
+df_total <- data.frame(
+  Year = years + min(bird_long$Year),
+  Observed = stan_data$y_total,
+  Predicted = y_total_pred
+)
+
+ggplot(df_total, aes(x = Year)) +
+  geom_line(aes(y = Observed, linetype = "Observed"), color = "black") +
+  geom_line(aes(y = Predicted, linetype = "Predicted"), color = "green") +
+  scale_linetype_manual(values = c("Observed" = "dashed", "Predicted" = "solid")) +
+  labs(
+    title = "Total Bird Count per Route: Observed vs Fitted",
+    y = "Mean Count per Route",
+    linetype = "Type"
+  ) +
+  theme_minimal()
+
+```
 
 
 ## Team Contribution Assignment
